@@ -13,7 +13,7 @@ from metahyper.api import ConfigResult, instance_from_map
 
 from ...search_spaces.search_space import SearchSpace
 from ..base_optimizer import BaseOptimizer
-from .sampling_policy import SamplingPolicy, UniformRandomPolicy
+from .sampling_policy import SamplingPolicy, RandomUniformPolicy
 from .promotion_policy import PromotionPolicy
 
 
@@ -265,6 +265,9 @@ class SuccessiveHalving(BaseOptimizer):
                 # TODO acquire arguments for the sampling policy
                 sampling_args = {}
                 config = self.sampling_policy.sample(**sampling_args)
+                fidelity_value = self.rung_map[0]  # base rung is always 0
+                config.fidelity.value = fidelity_value
+                
             previous_config_id = None
             config_id = f"{len(self.observed_configs)}_0"
 

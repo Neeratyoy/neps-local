@@ -19,16 +19,18 @@ class SamplingPolicy:
 
     def __init__(
             self,
-            pipeline_space: SearchSpace
+            pipeline_space: SearchSpace,
+            patience: int = 100
     ):
         self.pipeline_space = pipeline_space
+        self.patience = patience
 
     @abstractmethod
-    def sample(self, num_configs: int = 1) -> list[SearchSpace]:
+    def sample(self) -> SearchSpace:
         pass
 
 
-class UniformRandomPolicy(SamplingPolicy):
+class RandomUniformPolicy(SamplingPolicy):
     """A random policy for sampling configuration, i.e. the default for SH / hyperband
 
     Args:
@@ -38,9 +40,35 @@ class UniformRandomPolicy(SamplingPolicy):
     def __init__(
         self,
         pipeline_space: SearchSpace,
-
     ):
         super().__init__(pipeline_space=pipeline_space)
 
-    def sample(self, num_configs):
-        pass
+    def sample(self) -> SearchSpace:
+        return self.pipeline_space.sample(patience=self.patience, user_priors=False, ignore_fidelity=True)
+
+
+class FixedPriorPolicy(SamplingPolicy):
+    """A random policy for sampling configuration, i.e. the default for SH / hyperband, but samples a fixed
+    fraction from the prior.
+    """
+
+    def __init__(
+        self,
+        pipeline_space: SearchSpace,
+        fraction_from_prior: float = 1
+    ):
+        super().__init__(pipeline_space=pipeline_space)
+        assert 0 <= fraction_from_prior <= 1
+        self.fraction_from_prior = fraction_from_prior
+
+    def sample(self) -> SearchSpace:
+        """Samples from the prior with a certain probabiliyu
+
+        Returns:
+            SearchSpace: [description]
+        """        
+        if np.random.uniform() < self.fraction_from_prior:
+            return self.pipeline_space.sample(patience=self.patience, user_priors=True, ignore_fidelity=True)
+
+        else:
+            return self.pipeline_space.sample(patience=self.patience, user_priors=False, ignore_fidelity=True)

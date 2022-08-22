@@ -1,10 +1,11 @@
 import logging
 
 import torch
-
+import numpy as np
 import neps
+from neps.search_spaces.search_space import SearchSpace
 from neps_examples.multi_fidelity.model_and_optimizer import get_model_and_optimizer
-
+from neps.optimizers.successive_halving.sampling_policy import RandomUniformPolicy, FixedPriorPolicy
 
 def run_pipeline(working_directory, previous_working_directory, learning_rate, epoch):
     model, optimizer = get_model_and_optimizer(learning_rate)
@@ -30,11 +31,11 @@ def run_pipeline(working_directory, previous_working_directory, learning_rate, e
         working_directory / checkpoint_name,
     )
 
-    return learning_rate * epoch  # Replace with actual error
+    return np.log(learning_rate / epoch)  # Replace with actual error
 
 
 pipeline_space = dict(
-    learning_rate=neps.FloatParameter(lower=1e-4, upper=1e0, log=True),
+    learning_rate=neps.FloatParameter(lower=1e-4, upper=1e0, log=True, default=1e-1, default_confidence="high"),
     epoch=neps.IntegerParameter(lower=1, upper=100, is_fidelity=True),
 )
 
@@ -43,7 +44,8 @@ neps.run(
     run_pipeline=run_pipeline,
     pipeline_space=pipeline_space,
     working_directory="results/sh_example",
-    max_evaluations_total=15,
-    searcher='successive_halving'
+    max_evaluations_total=50,
+    searcher='successive_halving',
+    sampling_policy=FixedPriorPolicy(SearchSpace(**pipeline_space))
 )
 previous_results, pending_configs = neps.status("results/sh_example")
