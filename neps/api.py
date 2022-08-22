@@ -115,6 +115,7 @@ def run(
         "cost_cooling",
         "mf_bayesian_optimization",
         "grid_search",
+        "successive_halving",
     ]
     | BaseOptimizer = "default",
     serializer: Literal["yaml", "dill", "json"] = "yaml",

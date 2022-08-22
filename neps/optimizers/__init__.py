@@ -7,6 +7,7 @@ from .bayesian_optimization.cost_cooling import CostCooling
 from .bayesian_optimization.multi_fidelity import BayesianOptimizationMultiFidelity
 from .bayesian_optimization.optimizer import BayesianOptimization
 from .grid_search.optimizer import GridSearch
+from .successive_halving.successive_halving import SuccessiveHalving
 from .random_search.optimizer import RandomSearch
 from .regularized_evolution.optimizer import RegularizedEvolution
 
@@ -18,4 +19,5 @@ SearcherMapping: dict[str, Callable] = {
     "cost_cooling": CostCooling,
     "regularized_evolution": RegularizedEvolution,
     "grid_search": GridSearch,
+    "successive_halving": SuccessiveHalving
 }
