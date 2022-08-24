@@ -1,21 +1,13 @@
 from __future__ import annotations
 
-
 from abc import abstractmethod
-import random
-from typing import Any, List, Dict
-
 import numpy as np
-import metahyper
-
-from metahyper.api import ConfigResult
 
 from ...search_spaces.search_space import SearchSpace
-from ...search_spaces.numerical.integer import IntegerParameter
 
 
 class SamplingPolicy:
-    """Base class for implementing a sampling straregy for Successive halving and its subclasses"""
+    """Base class for implementing a sampling straregy for SH and its subclasses"""
 
     def __init__(
             self,
@@ -44,12 +36,14 @@ class RandomUniformPolicy(SamplingPolicy):
         super().__init__(pipeline_space=pipeline_space)
 
     def sample(self) -> SearchSpace:
-        return self.pipeline_space.sample(patience=self.patience, user_priors=False, ignore_fidelity=True)
+        return self.pipeline_space.sample(
+            patience=self.patience, user_priors=False, ignore_fidelity=True
+        )
 
 
 class FixedPriorPolicy(SamplingPolicy):
-    """A random policy for sampling configuration, i.e. the default for SH / hyperband, but samples a fixed
-    fraction from the prior.
+    """A random policy for sampling configuration, i.e. the default for SH but samples
+    a fixed fraction from the prior.
     """
 
     def __init__(
@@ -66,9 +60,10 @@ class FixedPriorPolicy(SamplingPolicy):
 
         Returns:
             SearchSpace: [description]
-        """        
+        """
+        user_priors = False
         if np.random.uniform() < self.fraction_from_prior:
-            return self.pipeline_space.sample(patience=self.patience, user_priors=True, ignore_fidelity=True)
-
-        else:
-            return self.pipeline_space.sample(patience=self.patience, user_priors=False, ignore_fidelity=True)
+            user_priors = True
+        return self.pipeline_space.sample(
+            patience=self.patience, user_priors=user_priors, ignore_fidelity=True
+        )

@@ -7,6 +7,7 @@ from neps.search_spaces.search_space import SearchSpace
 from neps_examples.multi_fidelity.model_and_optimizer import get_model_and_optimizer
 from neps.optimizers.successive_halving.sampling_policy import RandomUniformPolicy, FixedPriorPolicy
 
+
 def run_pipeline(working_directory, previous_working_directory, learning_rate, epoch):
     model, optimizer = get_model_and_optimizer(learning_rate)
     checkpoint_name = "checkpoint.pth"
@@ -35,7 +36,9 @@ def run_pipeline(working_directory, previous_working_directory, learning_rate, e
 
 
 pipeline_space = dict(
-    learning_rate=neps.FloatParameter(lower=1e-4, upper=1e0, log=True, default=1e-1, default_confidence="high"),
+    learning_rate=neps.FloatParameter(
+        lower=1e-4, upper=1e0, log=True, default=1e-1, default_confidence="high"
+    ),
     epoch=neps.IntegerParameter(lower=1, upper=100, is_fidelity=True),
 )
 
