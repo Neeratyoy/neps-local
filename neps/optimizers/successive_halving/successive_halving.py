@@ -104,12 +104,18 @@ class SuccessiveHalving(BaseOptimizer):
             _n_config //= self.eta
         return config_map
 
+    @classmethod
+    def _get_config_id_split(cls, config_id: str) -> (int, int):
+        # assumes config IDs of the format `[unique config int ID]_[int rung ID]`
+        _config, _rung = config_id.split("_")
+        return _config, _rung
+
     # TODO: check pending
     def _load_previous_observations(
         self, previous_results: dict[str, ConfigResult]
     ) -> None:
         for config_id, config_val in previous_results.items():
-            _config, _rung = config_id.split("_")
+            _config, _rung = self._get_config_id_split(config_id)
             if int(_config) in self.observed_configs.index:
                 # config already recorded in dataframe
                 rung_recorded = self.observed_configs.at[int(_config), "rung"]
@@ -147,31 +153,37 @@ class SuccessiveHalving(BaseOptimizer):
         # previous optimization run exists and needs to be loaded
         self._load_previous_observations(previous_results)
         self.total_fevals = len(previous_results)
+
+        # TODO: check if we need the below commented block
+        #  redundant with _load_previous_observations()
         # iterates over all previous results and updates the list of observed
         # configs with the highest fidelity it was evaluated on and its performance
-        for config_id, config_val in previous_results.items():
-            _config, _rung = config_id.split("_")
-            perf = self.get_loss(config_val.result)
-            if int(_config) not in self.observed_configs.index:
-                # this condition and check is important to handle async scenarios as
-                # the `previous_results` can provide configs that have not been
-                # encountered by this instantiation of the optimizer object
-                _df = pd.DataFrame(
-                    [[config_val.config, int(_rung), perf]],
-                    columns=self.observed_configs.columns,
-                    index=pd.Series(int(_config)),  # key for config_id
-                )
-                self.observed_configs = pd.concat(
-                    (self.observed_configs, _df)
-                ).sort_index()
-            else:
-                if int(_rung) >= self.observed_configs.at[int(_config), "rung"]:
-                    self.observed_configs.at[int(_config), "rung"] = int(_rung)
-                    self.observed_configs.at[int(_config), "perf"] = perf
+        # for config_id, config_val in previous_results.items():
+        #     _config, _rung = self._get_config_id_split(config_id)
+        #     perf = self.get_loss(config_val.result)
+        #     if int(_config) not in self.observed_configs.index:
+        #         # this condition and check is important to handle async scenarios as
+        #         # the `previous_results` can provide configs that have not been
+        #         # encountered by this instantiation of the optimizer object
+        #         _df = pd.DataFrame(
+        #             [[config_val.config, int(_rung), perf]],
+        #             columns=self.observed_configs.columns,
+        #             index=pd.Series(int(_config)),  # key for config_id
+        #         )
+        #         self.observed_configs = pd.concat(
+        #             (self.observed_configs, _df)
+        #         ).sort_index()
+        #     else:
+        #         if int(_rung) >= self.observed_configs.at[int(_config), "rung"]:
+        #             self.observed_configs.at[int(_config), "rung"] = int(_rung)
+        #             self.observed_configs.at[int(_config), "perf"] = perf
+
+        # TODO: UNCOMMENT TILL HERE?
+
         # iterates over all pending evaluations and updates the list of observed
         # configs with the rung and performance as None
         for config_id, _ in pending_evaluations.items():
-            _config, _rung = config_id.split("_")
+            _config, _rung = self._get_config_id_split(config_id)
             if int(_config) not in self.observed_configs.index:
                 _df = pd.DataFrame(
                     [[None, int(_rung), None]],
@@ -185,7 +197,7 @@ class SuccessiveHalving(BaseOptimizer):
                 self.observed_configs.at[int(_config), "rung"] = int(_rung)
                 self.observed_configs.at[int(_config), "perf"] = None
 
-        # to account for incomplete evaluations from being promoted
+        # to account for incomplete evaluations from being promoted --- working on a copy
         _observed_configs = self.observed_configs.copy().dropna(inplace=False)
         # iterates over the list of explored configs and buckets them to respective
         # rungs depending on the highest fidelity it was evaluated at
@@ -198,7 +210,16 @@ class SuccessiveHalving(BaseOptimizer):
             self.rung_members_performance[_rung] = _observed_configs.perf[
                 _observed_configs.rung == _rung
             ].values
+
         # identifying promotion list per rung
+        # TODO make this dependent on the promotion policy
+        #  Take rung membership list as the current snapshot of the optimizer state
+        #  Based on promotion policy, return a per rung mapping of promotable configs
+
+        # self.rung_promotions = self.promotion_policy.retrieve_promotions(
+        #     self.rung_members, self.rung_members_performance
+        # )
+
         self.rung_promotions = dict()
         for _rung in self.rung_map.keys():
             if _rung == self.max_rung:
@@ -207,7 +228,6 @@ class SuccessiveHalving(BaseOptimizer):
             top_k = len(self.rung_members_performance[_rung]) // self.eta
             self.rung_promotions[_rung] = []
 
-            # TODO make this dependent on the promotion policy
             if top_k > 0:
                 if self.promotion_policy is None:
                     self.rung_promotions[_rung] = np.array(self.rung_members[_rung])[
