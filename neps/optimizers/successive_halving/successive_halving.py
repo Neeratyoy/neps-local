@@ -26,8 +26,8 @@ class SuccessiveHalving(BaseOptimizer):
         early_stopping_rate: int = 0,
         initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
         use_priors: bool = False,
-        sampling_policy: SamplingPolicy = None,
-        promotion_policy: PromotionPolicy = None,
+        sampling_policy: SamplingPolicy = RandomUniformPolicy,
+        promotion_policy: PromotionPolicy = SyncPromotionPolicy,
         loss_value_on_error: None | float = None,
         cost_value_on_error: None | float = None,
         logger=None,
@@ -45,18 +45,8 @@ class SuccessiveHalving(BaseOptimizer):
         # SH implicitly sets early_stopping_rate to 0
         # the parameter is exposed to allow HB to call SH with different stopping rates
         self.early_stopping_rate = early_stopping_rate
-        if sampling_policy is None:
-            if use_priors:
-                self.sampling_policy = FixedPriorPolicy(pipeline_space)
-            else:
-                self.sampling_policy = RandomUniformPolicy(pipeline_space)
-        else:
-            self.sampling_policy = sampling_policy
-
-        if promotion_policy is None:
-            self.promotion_policy = SyncPromotionPolicy(self.eta)
-        else:
-            self.promotion_policy = promotion_policy
+        self.sampling_policy = sampling_policy(pipeline_space)
+        self.promotion_policy = promotion_policy(self.eta)
 
         # `max_budget_init` checks for the number of configurations that have been
         # evaluated at the target budget
@@ -308,6 +298,37 @@ class SuccessiveHalving(BaseOptimizer):
         # important to tell SH to query the next allocation
         self._update_state_counter()
         return config.hp_values(), config_id, previous_config_id  # type: ignore
+
+
+class SuccessiveHalvingWithPriors(SuccessiveHalving):
+    """Implements a SuccessiveHalving procedure with a sampling and promotion policy."""
+
+    def __init__(
+        self,
+        pipeline_space: SearchSpace,
+        budget: int,
+        eta: int = 3,
+        early_stopping_rate: int = 0,
+        initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
+        sampling_policy: SamplingPolicy = RandomUniformPolicy,
+        promotion_policy: PromotionPolicy = SyncPromotionPolicy,
+        loss_value_on_error: None | float = None,
+        cost_value_on_error: None | float = None,
+        logger=None,
+    ):
+        super().__init__(
+            pipeline_space=pipeline_space,
+            budget=budget,
+            eta=eta,
+            early_stopping_rate=early_stopping_rate,
+            initial_design_type=initial_design_type,
+            use_priors=True,  # key change to the base SH class
+            sampling_policy=sampling_policy,
+            promotion_policy=promotion_policy,
+            loss_value_on_error=loss_value_on_error,
+            cost_value_on_error=cost_value_on_error,
+            logger=logger,
+        )
 
 
 class AsynchronousSuccessiveHalving(SuccessiveHalving):
