@@ -10,8 +10,8 @@ from typing_extensions import Literal
 from ...search_spaces.numerical.integer import IntegerParameter
 from ...search_spaces.search_space import SearchSpace
 from ..base_optimizer import BaseOptimizer
-from .promotion_policy import PromotionPolicy
-from .sampling_policy import RandomUniformPolicy, SamplingPolicy
+from .promotion_policy import PromotionPolicy, SyncPromotionPolicy
+from .sampling_policy import AsyncPromotionPolicy, RandomUniformPolicy, SamplingPolicy
 
 
 class SuccessiveHalving(BaseOptimizer):
@@ -21,11 +21,12 @@ class SuccessiveHalving(BaseOptimizer):
         self,
         pipeline_space: SearchSpace,
         budget: int,
-        eta: int = 4,
+        eta: int = 3,
         early_stopping_rate: int = 0,
         initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
+        use_priors: bool = False,
         sampling_policy: SamplingPolicy = RandomUniformPolicy,
-        promotion_policy: PromotionPolicy = None,
+        promotion_policy: PromotionPolicy = SyncPromotionPolicy,
     ):
         super().__init__(pipeline_space=pipeline_space, budget=budget)
         self.min_budget = pipeline_space.fidelity.lower
@@ -35,11 +36,12 @@ class SuccessiveHalving(BaseOptimizer):
         # the parameter is exposed to allow HB to call SH with different stopping rates
         self.early_stopping_rate = early_stopping_rate
         self.sampling_policy = sampling_policy
-        self.promotion_policy = promotion_policy
+        self.promotion_policy = promotion_policy(self.eta)
 
         # `max_budget_init` checks for the number of configurations that have been
         # evaluated at the target budget
         self.initial_design_type = initial_design_type
+        self.use_priors = use_priors
 
         # check to ensure no rung ID is negative
         # equivalent to s_max in https://arxiv.org/pdf/1603.06560.pdf
@@ -52,6 +54,10 @@ class SuccessiveHalving(BaseOptimizer):
         self.rung_map = self._get_rung_map(self.early_stopping_rate)
         self.config_map = self._get_config_map(self.early_stopping_rate)
 
+        # placeholder args for varying promotion and sampling policies
+        self.promotion_policy_kwargs = dict(config_map=self.config_map)
+        self.sampling_args: dict = {}
+
         self.max_rung = len(self.rung_map) - 1
         self.fidelities = list(self.rung_map.values())
         # stores the observations made and the corresponding fidelity explored
@@ -62,6 +68,27 @@ class SuccessiveHalving(BaseOptimizer):
         self.rung_members_performance: dict = dict()  # performances recorded per rung
         self.rung_promotions: dict = dict()  # records a promotable config per rung
         self.total_fevals = 0
+
+        # setup SH state counter
+        self._counter = 0
+        self.full_rung_trace = self._get_rung_trace()
+
+    def _get_rung_trace(self) -> list[int]:
+        """Lists the rung IDs in sequence of the flattened SH tree."""
+        rung_trace = []
+        for rung in self.rung_map.keys():
+            rung_trace.extend([rung] * self.config_map[rung])
+        return rung_trace
+
+    def _update_state_counter(self) -> None:
+        """Updates a counter to map where in the rung trace the current SH is."""
+        self._counter += 1
+        self._counter %= len(self.full_rung_trace)
+
+    def _get_rung_to_run(self) -> int:
+        """Retrieves the exact rung ID that is being scheduled by SH in the next call."""
+        rung = self.full_rung_trace[self._counter]
+        return rung
 
     def _get_rung_map(self, s: int = 0) -> dict:
         """Maps rungs (0,1,...,k) to a fidelity value based on fidelity bounds, eta, s."""
@@ -105,7 +132,7 @@ class SuccessiveHalving(BaseOptimizer):
         return config_map
 
     @classmethod
-    def _get_config_id_split(cls, config_id: str) -> (int, int):
+    def _get_config_id_split(cls, config_id: str) -> tuple(int, int):
         # assumes config IDs of the format `[unique config int ID]_[int rung ID]`
         _config, _rung = config_id.split("_")
         return _config, _rung
@@ -154,32 +181,6 @@ class SuccessiveHalving(BaseOptimizer):
         self._load_previous_observations(previous_results)
         self.total_fevals = len(previous_results)
 
-        # TODO: check if we need the below commented block
-        #  redundant with _load_previous_observations()
-        # iterates over all previous results and updates the list of observed
-        # configs with the highest fidelity it was evaluated on and its performance
-        # for config_id, config_val in previous_results.items():
-        #     _config, _rung = self._get_config_id_split(config_id)
-        #     perf = self.get_loss(config_val.result)
-        #     if int(_config) not in self.observed_configs.index:
-        #         # this condition and check is important to handle async scenarios as
-        #         # the `previous_results` can provide configs that have not been
-        #         # encountered by this instantiation of the optimizer object
-        #         _df = pd.DataFrame(
-        #             [[config_val.config, int(_rung), perf]],
-        #             columns=self.observed_configs.columns,
-        #             index=pd.Series(int(_config)),  # key for config_id
-        #         )
-        #         self.observed_configs = pd.concat(
-        #             (self.observed_configs, _df)
-        #         ).sort_index()
-        #     else:
-        #         if int(_rung) >= self.observed_configs.at[int(_config), "rung"]:
-        #             self.observed_configs.at[int(_config), "rung"] = int(_rung)
-        #             self.observed_configs.at[int(_config), "perf"] = perf
-
-        # TODO: UNCOMMENT TILL HERE?
-
         # iterates over all pending evaluations and updates the list of observed
         # configs with the rung and performance as None
         for config_id, _ in pending_evaluations.items():
@@ -212,43 +213,20 @@ class SuccessiveHalving(BaseOptimizer):
             ].values
 
         # identifying promotion list per rung
-        # TODO make this dependent on the promotion policy
-        #  Take rung membership list as the current snapshot of the optimizer state
-        #  Based on promotion policy, return a per rung mapping of promotable configs
-
-        # self.rung_promotions = self.promotion_policy.retrieve_promotions(
-        #     self.rung_members, self.rung_members_performance
-        # )
-
-        self.rung_promotions = dict()
-        for _rung in self.rung_map.keys():
-            if _rung == self.max_rung:
-                # cease promotions for the highest rung (configs at max budget)
-                continue
-            top_k = len(self.rung_members_performance[_rung]) // self.eta
-            self.rung_promotions[_rung] = []
-
-            if top_k > 0:
-                if self.promotion_policy is None:
-                    self.rung_promotions[_rung] = np.array(self.rung_members[_rung])[
-                        np.argsort(self.rung_members_performance[_rung])[:top_k]
-                    ].tolist()
-                else:
-                    promotion_kwargs = {}
-                    self.rung_promotions[_rung] = self.promotion_policy.promote(
-                        self.rung_members[_rung],
-                        self.rung_members_performance[_rung],
-                        **promotion_kwargs,
-                    ).tolist()
-
+        self.promotion_policy.set_state(
+            self.rung_members,
+            self.rung_members_performance,
+            **self.promotion_policy_kwargs,
+        )
+        self.rung_promotions = self.promotion_policy.retrieve_promotions()
         return
 
     def is_promotable(self) -> int | None:
+        """Returns an int if a rung can be promoted, else a None."""
         rung_to_promote = None
-        for _rung in reversed(range(self.max_rung)):
-            if len(self.rung_promotions[_rung]) > 0:
-                rung_to_promote = _rung
-                break
+        rung_next = self._get_rung_to_run()
+        if len(self.rung_promotions[rung_next]) > 0:
+            rung_to_promote = rung_next
         return rung_to_promote
 
     def is_init_phase(self) -> bool:
@@ -279,8 +257,7 @@ class SuccessiveHalving(BaseOptimizer):
         """
         rung_to_promote = self.is_promotable()
         if rung_to_promote is not None:
-            # promote existing config
-            # TODO implement the promotion rules?
+            # promotes the first recorded promotanle config in the argsort-ed rung
             row = self.observed_configs.iloc[self.rung_promotions[rung_to_promote][0]]
             config = deepcopy(row["config"])
             rung = rung_to_promote + 1
@@ -292,23 +269,60 @@ class SuccessiveHalving(BaseOptimizer):
         else:
             if self.sampling_policy is None:
                 config = self.pipeline_space.sample(
-                    patience=self.patience, user_priors=True, ignore_fidelity=True
+                    patience=self.patience,
+                    user_priors=self.use_priors,
+                    ignore_fidelity=True,
                 )
-                fidelity_value = self.rung_map[0]  # base rung is always 0
-                config.fidelity.value = fidelity_value
                 print("Sampled the config from pipeline space.")
             else:
-                # TODO acquire arguments for the sampling policy
-                sampling_args = {}
-                config = self.sampling_policy.sample(**sampling_args)
-                fidelity_value = self.rung_map[0]  # base rung is always 0
-                config.fidelity.value = fidelity_value
+                config = self.sampling_policy.sample(**self.sampling_args)
+            fidelity_value = self.rung_map[0]  # base rung is always 0
+            config.fidelity.value = fidelity_value
 
             previous_config_id = None
             config_id = f"{len(self.observed_configs)}_0"
 
-        print("Config:", config.hp_values())
+        # important to tell SH to query the next allocation
+        self.update_state_counter()
         return config.hp_values(), config_id, previous_config_id  # type: ignore
+
+
+class AsynchronousSuccessiveHalving(SuccessiveHalving):
+    """Implements a SuccessiveHalving procedure with a sampling and promotion policy."""
+
+    def __init__(
+        self,
+        pipeline_space: SearchSpace,
+        budget: int,
+        eta: int = 3,
+        early_stopping_rate: int = 0,
+        initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
+        use_priors: bool = False,
+        sampling_policy: SamplingPolicy = RandomUniformPolicy,
+        promotion_policy: PromotionPolicy = AsyncPromotionPolicy,
+    ):
+        super().__init__(
+            pipeline_space=pipeline_space,
+            budget=budget,
+            eta=eta,
+            early_stopping_rate=early_stopping_rate,
+            initial_design_type=initial_design_type,
+            use_priors=use_priors,
+            sampling_policy=sampling_policy,
+            promotion_policy=promotion_policy,
+        )
+
+    def is_promotable(self) -> int | None:
+        """Returns an int if a rung can be promoted, else a None."""
+        rung_to_promote = None
+        # iterates starting from the highest fidelity promotable to the lowest fidelity
+        for _rung in reversed(range(self.max_rung)):
+            if len(self.rung_promotions[_rung]) > 0:
+                rung_to_promote = _rung
+                # stop checking when a promotable config found
+                # no need to search at lower fidelities
+                break
+        return rung_to_promote
 
 
 if __name__ == "__main__":
