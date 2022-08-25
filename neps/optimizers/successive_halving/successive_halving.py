@@ -12,7 +12,7 @@ from ...search_spaces.numerical.integer import IntegerParameter
 from ...search_spaces.search_space import SearchSpace
 from ..base_optimizer import BaseOptimizer
 from .promotion_policy import AsyncPromotionPolicy, PromotionPolicy, SyncPromotionPolicy
-from .sampling_policy import FixedPriorPolicy, RandomUniformPolicy
+from .sampling_policy import FixedPriorPolicy, RandomUniformPolicy, SamplingPolicy
 
 
 class SuccessiveHalving(BaseOptimizer):
@@ -303,6 +303,8 @@ class SuccessiveHalving(BaseOptimizer):
 class SuccessiveHalvingWithPriors(SuccessiveHalving):
     """Implements a SuccessiveHalving procedure with a sampling and promotion policy."""
 
+    user_priors = True
+
     def __init__(
         self,
         pipeline_space: SearchSpace,
@@ -310,7 +312,7 @@ class SuccessiveHalvingWithPriors(SuccessiveHalving):
         eta: int = 3,
         early_stopping_rate: int = 0,
         initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
-        sampling_policy: SamplingPolicy = RandomUniformPolicy,
+        sampling_policy: SamplingPolicy = FixedPriorPolicy,
         promotion_policy: PromotionPolicy = SyncPromotionPolicy,
         loss_value_on_error: None | float = None,
         cost_value_on_error: None | float = None,
@@ -322,7 +324,7 @@ class SuccessiveHalvingWithPriors(SuccessiveHalving):
             eta=eta,
             early_stopping_rate=early_stopping_rate,
             initial_design_type=initial_design_type,
-            use_priors=True,  # key change to the base SH class
+            use_priors=self.user_priors,  # key change to the base SH class
             sampling_policy=sampling_policy,
             promotion_policy=promotion_policy,
             loss_value_on_error=loss_value_on_error,
@@ -355,6 +357,7 @@ class AsynchronousSuccessiveHalving(SuccessiveHalving):
             sampling_policy=sampling_policy,
             promotion_policy=promotion_policy,
         )
+        self.promotion_policy = promotion_policy(self.eta)
 
     def is_promotable(self) -> int | None:
         """Returns an int if a rung can be promoted, else a None."""

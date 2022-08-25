@@ -47,12 +47,17 @@ pipeline_space = dict(
 )
 
 logging.basicConfig(level=logging.INFO)
+
+
+searcher = "successive_halving"
+searcher_kwargs = dict(use_priors=False)
+searcher_output = "sh_example"
 neps.run(
     run_pipeline=run_pipeline,
     pipeline_space=pipeline_space,
-    root_directory="results/sh_example",
+    root_directory=f"results/{searcher_output}",
     max_evaluations_total=50,
-    searcher="successive_halving",
-    use_priors=False,
+    searcher=searcher,
+    **searcher_kwargs,
 )
-previous_results, pending_configs = neps.status("results/sh_example")
+previous_results, pending_configs = neps.status(f"results/{searcher_output}")
