@@ -99,7 +99,7 @@ class SuccessiveHalving(BaseOptimizer):
         # TODO --- @NEERATYOY --- @NEERATYOY --- @NEERATYOY ---
         # this doesn't work as intended (or other stuff doesn't. We only have 4 fidelities 0-3 in the example, but this
         # one has 4 as the lowest fidelity and goes down to zero. So one more than intended, and possibly backwards, too)
-        for rung in self.rung_map.keys():
+        for rung in sorted(self.rung_map.keys()):
             rung_trace.extend([rung] * self.config_map[rung])
         return rung_trace
 
@@ -149,7 +149,7 @@ class SuccessiveHalving(BaseOptimizer):
         # L2 from Alg 1 in https://arxiv.org/pdf/1603.06560.pdf
         _n_config = np.floor(s_max / (_s + 1)) * self.eta**_s
         config_map = dict()
-        for i in reversed(range(nrungs)):
+        for i in range(nrungs):
             config_map[i] = int(_n_config)
             _n_config //= self.eta
         return config_map
@@ -246,11 +246,11 @@ class SuccessiveHalving(BaseOptimizer):
 
     def is_promotable(self) -> int | None:
         """Returns an int if a rung can be promoted, else a None."""
-        rung_to_promote = None
         rung_next = self._get_rung_to_run()
-        if len(self.rung_promotions[rung_next]) > 0:
-            rung_to_promote = rung_next
-        return rung_to_promote
+        rung_to_promote = rung_next - 1
+        if rung_to_promote >= 0 and len(self.rung_promotions[rung_to_promote]) > 0:
+            return rung_to_promote
+        return None
 
     def is_init_phase(self) -> bool:
         """Decides if optimization is still under the warmstart phase/model-based search.
@@ -306,7 +306,7 @@ class SuccessiveHalving(BaseOptimizer):
             config_id = f"{len(self.observed_configs)}_0"
 
         # important to tell SH to query the next allocation
-        self.update_state_counter()
+        self._update_state_counter()
         return config.hp_values(), config_id, previous_config_id  # type: ignore
 
 
