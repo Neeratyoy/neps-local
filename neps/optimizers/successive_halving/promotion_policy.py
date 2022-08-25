@@ -44,13 +44,23 @@ class SyncPromotionPolicy(PromotionPolicy):
         assert self.config_map is not None
         max_rung = int(max(list(self.config_map.keys())))
 
-        for rung in self.config_map.keys():
+        for rung in sorted(self.config_map.keys()):
             if rung == max_rung:
                 # cease promotions for the highest rung (configs at max budget)
                 continue
             top_k = len(self.rung_members_performance[rung]) // self.eta
-            if len(self.rung_members[rung]) >= self.config_map[rung]:
-                _ordered_idx = np.argsort(self.rung_members_performance[rung])
+
+            # subsetting the top configurations in the rung that have not been promoted
+            _ordered_idx = np.argsort(self.rung_members_performance[rung])[
+                : self.config_map[rung]
+            ]
+
+            promotion_criteria = len(_ordered_idx) >= self.config_map[rung] or (
+                rung + 1 in self.rung_members
+                and (len(_ordered_idx) + len(self.rung_members[rung + 1]))
+                >= self.config_map[rung]
+            )
+            if promotion_criteria:
                 # stores the index of the top 1/eta configurations in the rung
                 self.rung_promotions[rung] = np.array(self.rung_members[rung])[
                     _ordered_idx
