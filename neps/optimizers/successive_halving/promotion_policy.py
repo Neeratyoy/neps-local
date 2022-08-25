@@ -29,8 +29,8 @@ class SyncPromotionPolicy(PromotionPolicy):
     Promotes only when all predefined number of config slots are full.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, eta, **kwargs):
+        super().__init__(eta, **kwargs)
         self.config_map: dict = None
 
     def set_state(
@@ -43,7 +43,7 @@ class SyncPromotionPolicy(PromotionPolicy):
         """Returns the top 1/eta configurations per rung if enough configurations seen"""
         assert self.config_map is not None
         max_rung = int(max(list(self.config_map.keys())))
-        rung_promotions: dict = {}
+
         for rung in self.config_map.keys():
             if rung == max_rung:
                 # cease promotions for the highest rung (configs at max budget)
@@ -57,7 +57,7 @@ class SyncPromotionPolicy(PromotionPolicy):
                 ][:top_k].tolist()
             else:
                 # synchronous SH waits if each rung has not seen the budgeted configs
-                rung_promotions[rung] = []
+                self.rung_promotions[rung] = []
         return self.rung_promotions
 
 
@@ -67,8 +67,8 @@ class AsyncPromotionPolicy(PromotionPolicy):
     Promotes whenever a higher fidelity has at least eta configurations.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, eta, **kwargs):
+        super().__init__(eta, **kwargs)
 
     def retrieve_promotions(self) -> dict:
         """Returns the top 1/eta configurations per rung if enough configurations seen"""

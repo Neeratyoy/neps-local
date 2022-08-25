@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -10,8 +11,8 @@ from typing_extensions import Literal
 from ...search_spaces.numerical.integer import IntegerParameter
 from ...search_spaces.search_space import SearchSpace
 from ..base_optimizer import BaseOptimizer
-from .promotion_policy import PromotionPolicy, SyncPromotionPolicy
-from .sampling_policy import AsyncPromotionPolicy, RandomUniformPolicy, SamplingPolicy
+from .promotion_policy import AsyncPromotionPolicy, PromotionPolicy, SyncPromotionPolicy
+from .sampling_policy import FixedPriorPolicy, RandomUniformPolicy
 
 
 class SuccessiveHalving(BaseOptimizer):
@@ -25,18 +26,37 @@ class SuccessiveHalving(BaseOptimizer):
         early_stopping_rate: int = 0,
         initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
         use_priors: bool = False,
-        sampling_policy: SamplingPolicy = RandomUniformPolicy,
-        promotion_policy: PromotionPolicy = SyncPromotionPolicy,
+        sampling_policy: SamplingPolicy = None,
+        promotion_policy: PromotionPolicy = None,
+        loss_value_on_error: None | float = None,
+        cost_value_on_error: None | float = None,
+        logger=None,
     ):
-        super().__init__(pipeline_space=pipeline_space, budget=budget)
+        super().__init__(
+            pipeline_space=pipeline_space,
+            budget=budget,
+            loss_value_on_error=loss_value_on_error,
+            cost_value_on_error=cost_value_on_error,
+            logger=logger,
+        )
         self.min_budget = pipeline_space.fidelity.lower
         self.max_budget = pipeline_space.fidelity.upper
         self.eta = eta
         # SH implicitly sets early_stopping_rate to 0
         # the parameter is exposed to allow HB to call SH with different stopping rates
         self.early_stopping_rate = early_stopping_rate
-        self.sampling_policy = sampling_policy
-        self.promotion_policy = promotion_policy(self.eta)
+        if sampling_policy is None:
+            if use_priors:
+                self.sampling_policy = FixedPriorPolicy(pipeline_space)
+            else:
+                self.sampling_policy = RandomUniformPolicy(pipeline_space)
+        else:
+            self.sampling_policy = sampling_policy
+
+        if promotion_policy is None:
+            self.promotion_policy = SyncPromotionPolicy(self.eta)
+        else:
+            self.promotion_policy = promotion_policy
 
         # `max_budget_init` checks for the number of configurations that have been
         # evaluated at the target budget
@@ -66,7 +86,7 @@ class SuccessiveHalving(BaseOptimizer):
         # stores which configs occupy each rung at any time
         self.rung_members: dict = {}  # stores config IDs per rung
         self.rung_members_performance: dict = dict()  # performances recorded per rung
-        self.rung_promotions: dict = dict()  # records a promotable config per rung
+        self.rung_promotions: dict = {}  # records a promotable config per rung
         self.total_fevals = 0
 
         # setup SH state counter
@@ -76,6 +96,9 @@ class SuccessiveHalving(BaseOptimizer):
     def _get_rung_trace(self) -> list[int]:
         """Lists the rung IDs in sequence of the flattened SH tree."""
         rung_trace = []
+        # TODO --- @NEERATYOY --- @NEERATYOY --- @NEERATYOY ---
+        # this doesn't work as intended (or other stuff doesn't. We only have 4 fidelities 0-3 in the example, but this
+        # one has 4 as the lowest fidelity and goes down to zero. So one more than intended, and possibly backwards, too)
         for rung in self.rung_map.keys():
             rung_trace.extend([rung] * self.config_map[rung])
         return rung_trace
@@ -273,7 +296,7 @@ class SuccessiveHalving(BaseOptimizer):
                     user_priors=self.use_priors,
                     ignore_fidelity=True,
                 )
-                print("Sampled the config from pipeline space.")
+
             else:
                 config = self.sampling_policy.sample(**self.sampling_args)
             fidelity_value = self.rung_map[0]  # base rung is always 0

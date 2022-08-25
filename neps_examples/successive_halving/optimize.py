@@ -1,11 +1,15 @@
 import logging
 
-import torch
 import numpy as np
+import torch
+
 import neps
+from neps.optimizers.successive_halving.sampling_policy import (
+    FixedPriorPolicy,
+    RandomUniformPolicy,
+)
 from neps.search_spaces.search_space import SearchSpace
 from neps_examples.multi_fidelity.model_and_optimizer import get_model_and_optimizer
-from neps.optimizers.successive_halving.sampling_policy import RandomUniformPolicy, FixedPriorPolicy
 
 
 def run_pipeline(working_directory, previous_working_directory, learning_rate, epoch):
@@ -48,7 +52,8 @@ neps.run(
     pipeline_space=pipeline_space,
     working_directory="results/sh_example",
     max_evaluations_total=50,
-    searcher='successive_halving',
-    sampling_policy=FixedPriorPolicy(SearchSpace(**pipeline_space))
+    searcher="successive_halving",
+    use_priors=True
+    # sampling_policy=FixedPriorPolicy(SearchSpace(**pipeline_space))
 )
 previous_results, pending_configs = neps.status("results/sh_example")
