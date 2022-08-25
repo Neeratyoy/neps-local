@@ -79,13 +79,18 @@ class AsyncPromotionPolicy(PromotionPolicy):
 
     def __init__(self, eta, **kwargs):
         super().__init__(eta, **kwargs)
+        self.max_rung = None
+
+    def set_state(
+        self, members: dict, performances: dict, max_rung: int, **kwargs
+    ) -> None:
+        super().set_state(members, performances)
+        self.max_rung = max_rung
 
     def retrieve_promotions(self) -> dict:
         """Returns the top 1/eta configurations per rung if enough configurations seen"""
-        max_rung = int(max(list(self.rung_map.keys())))
-        rung_promotions: dict = {}
-        for rung in self.config_map.keys():
-            if rung == max_rung:
+        for rung in range(self.max_rung + 1):
+            if rung == self.max_rung:
                 # cease promotions for the highest rung (configs at max budget)
                 continue
             # if less than eta configurations seen, no promotions occur as top_k=0

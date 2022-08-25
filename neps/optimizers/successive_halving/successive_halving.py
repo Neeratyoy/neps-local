@@ -303,7 +303,7 @@ class SuccessiveHalving(BaseOptimizer):
 class SuccessiveHalvingWithPriors(SuccessiveHalving):
     """Implements a SuccessiveHalving procedure with a sampling and promotion policy."""
 
-    user_priors = True
+    use_priors = True
 
     def __init__(
         self,
@@ -324,7 +324,7 @@ class SuccessiveHalvingWithPriors(SuccessiveHalving):
             eta=eta,
             early_stopping_rate=early_stopping_rate,
             initial_design_type=initial_design_type,
-            use_priors=self.user_priors,  # key change to the base SH class
+            use_priors=self.use_priors,  # key change to the base SH class
             sampling_policy=sampling_policy,
             promotion_policy=promotion_policy,
             loss_value_on_error=loss_value_on_error,
@@ -346,6 +346,9 @@ class AsynchronousSuccessiveHalving(SuccessiveHalving):
         use_priors: bool = False,
         sampling_policy: SamplingPolicy = RandomUniformPolicy,
         promotion_policy: PromotionPolicy = AsyncPromotionPolicy,
+        loss_value_on_error: None | float = None,
+        cost_value_on_error: None | float = None,
+        logger=None,
     ):
         super().__init__(
             pipeline_space=pipeline_space,
@@ -356,20 +359,56 @@ class AsynchronousSuccessiveHalving(SuccessiveHalving):
             use_priors=use_priors,
             sampling_policy=sampling_policy,
             promotion_policy=promotion_policy,
+            loss_value_on_error=loss_value_on_error,
+            cost_value_on_error=cost_value_on_error,
+            logger=logger,
         )
-        self.promotion_policy = promotion_policy(self.eta)
+        self.promotion_policy_kwargs.update({"max_rung": self.max_rung})
 
     def is_promotable(self) -> int | None:
         """Returns an int if a rung can be promoted, else a None."""
         rung_to_promote = None
         # iterates starting from the highest fidelity promotable to the lowest fidelity
-        for _rung in reversed(range(self.max_rung)):
-            if len(self.rung_promotions[_rung]) > 0:
-                rung_to_promote = _rung
+        for rung in reversed(range(self.max_rung)):
+            if len(self.rung_promotions[rung]) > 0:
+                rung_to_promote = rung
                 # stop checking when a promotable config found
                 # no need to search at lower fidelities
                 break
         return rung_to_promote
+
+
+class AsynchronousSuccessiveHalvingWithPriors(AsynchronousSuccessiveHalving):
+    """Implements a SuccessiveHalving procedure with a sampling and promotion policy."""
+
+    use_priors = True
+
+    def __init__(
+        self,
+        pipeline_space: SearchSpace,
+        budget: int,
+        eta: int = 3,
+        early_stopping_rate: int = 0,
+        initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
+        sampling_policy: SamplingPolicy = RandomUniformPolicy,
+        promotion_policy: PromotionPolicy = AsyncPromotionPolicy,
+        loss_value_on_error: None | float = None,
+        cost_value_on_error: None | float = None,
+        logger=None,
+    ):
+        super().__init__(
+            pipeline_space=pipeline_space,
+            budget=budget,
+            eta=eta,
+            early_stopping_rate=early_stopping_rate,
+            initial_design_type=initial_design_type,
+            use_priors=self.use_priors,  # key change from ASHA
+            sampling_policy=sampling_policy,
+            promotion_policy=promotion_policy,
+            loss_value_on_error=loss_value_on_error,
+            cost_value_on_error=cost_value_on_error,
+            logger=logger,
+        )
 
 
 if __name__ == "__main__":

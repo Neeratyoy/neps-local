@@ -11,6 +11,7 @@ from .random_search.optimizer import RandomSearch
 from .regularized_evolution.optimizer import RegularizedEvolution
 from .successive_halving.successive_halving import (
     AsynchronousSuccessiveHalving,
+    AsynchronousSuccessiveHalvingWithPriors,
     SuccessiveHalving,
     SuccessiveHalvingWithPriors,
 )
@@ -26,4 +27,5 @@ SearcherMapping: dict[str, Callable] = {
     "successive_halving": SuccessiveHalving,
     "successive_halving_prior": SuccessiveHalvingWithPriors,
     "asha": AsynchronousSuccessiveHalving,
+    "asha_prior": AsynchronousSuccessiveHalvingWithPriors,
 }
