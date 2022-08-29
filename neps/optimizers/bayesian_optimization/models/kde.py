@@ -1,306 +1,150 @@
 import logging
 from copy import deepcopy
-from typing import Iterable, Union
+from typing import Iterable, List, Union
 
 import numpy as np
-import torch
-
-import neps
-
-from neps.search_spaces.search_space import SearchSpace
-from neps.optimizers.bayesian_optimization.kernels.kde_kernels import (
-    AitchisonAitken,
-    Gaussian,
-    WangRyzinInteger,
-    WangRyzinOrdinal,
-)
-from neps.search_spaces import (
-    CategoricalParameter,
-    FloatParameter,
-    IntegerParameter,
-    NumericalParameter,
-)
+import numpy.typing as npt
+from statsmodels.nonparametric._kernel_base import _adjust_shape, gpke, kernel_func
+from statsmodels.nonparametric.kernel_density import KDEMultivariate
 
 
-class KernelDensityEstimator:
+def weighted_generalized_kernel_prod(
+    bw: npt.ArrayLike,
+    data: npt.ArrayLike,
+    data_predict: npt.ArrayLike,
+    var_type: List[str],
+    data_weights: npt.ArrayLike = None,
+    cont_kerneltype: str = 'gaussian',
+    ordered_kerneltype: str = 'wangryzin',
+    unordered_kerneltype: str = 'aitchisonaitken',
+    to_sum: bool = True)
+     -> np.ndarray:
     """
-    Implementation of a Gaussian Kernel Density Estimator inspired by BOHB and TPE. 
-    Most functionality is copy-pasted from HPBandSter (https://github.com/automl/HpBandSter)
+    Ripped straight from Statsmodels, with generalization to datapoint weights.
+    Returns the non-normalized Generalized Product Kernel Estimator
+    Parameters
+    ----------
+    bw : 1-D ndarray
+        The user-specified bandwidth parameters.
+    data : 1D or 2-D ndarray
+        The training data.
+    data_predict : 1-D ndarray
+        The evaluation points at which the kernel estimation is performed.
+    var_type : str, optional
+        The variable type (continuous, ordered, unordered).
+    cont_kerneltype : str, optional
+        The kernel used for the continuous variables.
+    ordered_kerneltype : str, optional
+        The kernel used for the ordered discrete variables.
+    unordered_kerneltype : str, optional
+        The kernel used for the unordered discrete variables.
+    to_sum : bool, optional
+        Whether or not to sum the calculated array of densities.  Default is
+        True.
+    Returns
+    -------
+    dens : array_like
+        The generalized product kernel density estimator.
+    Notes
+    -----
+    The formula for the multivariate kernel estimator for the pdf is:
+    .. math:: f(x)=\frac{1}{nh_{1}...h_{q}}\sum_{i=1}^
+                        {n}K\left(\frac{X_{i}-x}{h}\right)
+    where
+    .. math:: K\left(\frac{X_{i}-x}{h}\right) =
+                k\left( \frac{X_{i1}-x_{1}}{h_{1}}\right)\times
+                k\left( \frac{X_{i2}-x_{2}}{h_{2}}\right)\times...\times
+                k\left(\frac{X_{iq}-x_{q}}{h_{q}}\right)
     """
+    kernel_types = dict(c=cont_kerneltype,
+                        o=ordered_kerneltype, u=unordered_kerneltype)
 
-    def __init__(
-        self, search_space, fully_dimensional=True, min_bandwidth=1e-4, fix_boundary=True
-    ):
+    K_val = np.empty(data.shape)
+    for dim, vtype in enumerate(var_type):
+        func = kernel_func[kernel_types[vtype]]
+        K_val[:, dim] = func(
+            bw[dim], data[:, dim], data_predict[dim]) * data_weights / data_weights.mean()
+
+    iscontinuous = np.array([c == 'c' for c in var_type])
+
+    # pseudo-normalization of the density, seems to work so-so
+    dens = K_val.prod(axis=1) / np.prod(bw[iscontinuous])
+    if to_sum:
+        return dens.sum(axis=0)
+    else:
+        return dens
+
+
+class PriorWeightedKDE(KDEMultivariate):
+
+    def __init__(self, data, var_type, num_values, bw=None, defaults=None, data_weights=None, prior=None, prior_weight=0, prior_as_samples=False, min_density=-np.inf):
         """
-        Parameters:
-        -----------
-                search_space:
-                fully_dimensional: bool
-                        if True, a true multivariate KDE is build, otherwise it's approximated by
-                        the product of one dimensional KDEs
+        Implementation of a Kernel Density Estimator with multivariate weighting functionality and
+        possible prior incorporation.
 
-                min_bandwidth: float
-                        a lower limit to the bandwidths which can insure 'uncertainty'
-
+        Args:
+            data ([type]): [description]
+            var_type ([type]): [description]
+            bw ([type], optional): [description]. Defaults to None.
+            defaults ([type], optional): [description]. Defaults to None.
+            data_weights ([type], optional): [description]. Defaults to None.
+            prior ([type], optional): [description]. Defaults to None.
+            prior_as_samples (bool, optional): [description]. Defaults to False.
         """
-        self.search_space = search_space
 
-        self.types, self.num_values, self.logs = self._get_types()
-        self.min_bandwidth = min_bandwidth
-        self.fully_dimensional = fully_dimensional
-        self.fix_boundary = fix_boundary
+        super().__init__(data, var_type, bw=None, defaults=None)
 
-        # precompute bandwidth bounds
-        self.bw_bounds = []
+        if data_weights is None:
+            self.data_weights = np.ones(data.shape[0])
+        else:
+            self.data_weights = np.asarray(data_weights)
 
-        max_bw_cont = 0.5
-        max_bw_cat = 0.999
+        self.num_values = num_values
+        self.prior = prior
+        self.prior_weight = prior_weight
+        self.prior_as_samples = prior_as_samples
+        self.min_density = min_density
+        if self.prior_as_samples:
+            self.prior_enhanced_data = self._prior_enhance_data()
+        else:
+            self.prior_enhanced_data = self.data
 
-        for t in self.types:
-            if t == "C":
-                self.bw_bounds.append((min_bandwidth, max_bw_cont))
-            else:
-                self.bw_bounds.append((min_bandwidth, max_bw_cat))
-
-        self.bw_clip = np.array([bwb[1] for bwb in self.bw_bounds])
-
-        # initialize other vars
-        self.bandwidths = np.array([float("NaN")] * len(self.types))
-        self.kernels = []
-        for t, n, log in zip(self.types, self.num_values, self.logs):
-
-            kwargs = {"num_values": n,
-                      "fix_boundary": fix_boundary, "log": log}
-
-            if t == "I":
-                self.kernels.append(WangRyzinInteger(**kwargs))
-            if t == "C":
-                self.kernels.append(Gaussian(**kwargs))
-            if t == "O":
-                self.kernels.append(WangRyzinOrdinal(**kwargs))
-            if t == "U":
-                self.kernels.append(AitchisonAitken(**kwargs))
-        self.data = None
-
-    def fit(
-        self,
-        data,
-        weights=None,
-        bw_estimator="scott",
-        efficient_bw_estimation=True,
-        update_bandwidth=True,
-    ):
+    def pdf(self, data_predict=None):
         """
-        fits the KDE to the data by estimating the bandwidths and storing the data
-
+        Evaluate the probability density function.
         Parameters
         ----------
-                data: 2d-array, shape N x M
-                        N datapoints in an M dimensional space to which the KDE is fit
-                weights: 1d array
-                        N weights, one for every data point.
-                        They will be normalized to sum up to one
-                fix_boundary_effects: bool
-                        whether to reweigh points close to the bondary no fix the pdf
-                bw_estimator: str
-                        allowed values are 'scott' and 'mlcv' for Scott's rule of thumb
-                        and the maximum likelihood via cross-validation
-                efficient_bw_estimation: bool
-                        if true, start bandwidth optimization from the previous value, otherwise
-                        start from Scott's values
-                update_bandwidths: bool
-                        whether to update the bandwidths at all
+        data_predict : array_like, optional
+            Points to evaluate at.  If unspecified, the training data is used.
+        Returns
+        -------
+        pdf_est : array_like
+            Probability density function evaluated at `data_predict`.
+        Notes
+        -----
+        The probability density is given by the generalized product kernel
+        estimator:
+        .. math:: K_{h}(X_{i},X_{j}) =
+            \prod_{s=1}^{q}h_{s}^{-1}k\left(\frac{X_{is}-X_{js}}{h_{s}}\right)
         """
-        if self.data is None:
-            # overwrite some values in case this is the first fit of the KDE
-            efficient_bw_estimation = False
-            update_bandwidth = True
-
-        self.data = np.asfortranarray(data)
-
-        for i, k in enumerate(self.kernels):
-            self.kernels[i].data = self.data[:, i]
-
-        self.weights = self._normalize_weights(weights)
-
-        if not update_bandwidth:
-            return
-
-        if not efficient_bw_estimation or bw_estimator == "scott":
-            # inspired by the the statsmodels code
-            sigmas = np.std(self.data, ddof=1, axis=0)
-            IQRs = np.subtract.reduce(
-                np.percentile(self.data, [75, 25], axis=0))
-            self.bandwidths = (
-                1.059 * np.minimum(sigmas, IQRs) *
-                np.power(self.data.shape[0], -0.2)
-            )
-            # crop bandwidths for categorical parameters
-            self.bandwidths = np.clip(
-                self.bandwidths, self.min_bandwidth, self.bw_clip)
-
-        if bw_estimator == "mlcv":
-            # optimize bandwidths here
-            def opt_me(bw):
-                self.bandwidths = bw
-                self._set_kernel_bandwidths()
-                return self.loo_negloglikelihood()
-
-            res = spo.minimize(
-                opt_me, self.bandwidths, bounds=self.bw_bounds, method="SLSQP"
-            )
-            self.optimizer_result = res
-            self.bandwidths[:] = res.x
-        self._set_kernel_bandwidths()
-
-    def _set_kernel_bandwidths(self):
-        for i, b in enumerate(self.bandwidths):
-            print(i, b)
-            self.kernels[i].set_bandwidth(b)
-
-    def set_bandwidths(self, bandwidths):
-        self.bandwidths[:] = bandwidths
-        self._set_kernel_bandwidths()
-
-    def _normalize_weights(self, weights):
-
-        weights = np.ones(self.data.shape[0]) if weights is None else weights
-        weights /= weights.sum()
-
-        return weights
-
-    # @self._convert_config_to_data
-    def _individual_pdfs(self, x_test):
-
-        pdfs = np.zeros(
-            shape=[x_test.shape[0], self.data.shape[0], self.data.shape[1]],
-            dtype=np.float64,
-        )
-
-        for i, k in enumerate(self.kernels):
-            pdfs[:, :, i] = k(x_test[:, i]).T
-
-        return pdfs
-
-    def loo_negloglikelihood(self):
-        # get all pdf values of the training data (including 'self interaction')
-        pdfs = self._individual_pdfs(self.data)
-
-        # get indices to remove diagonal values for LOO part :)
-        indices = np.diag_indices(pdfs.shape[0])
-
-        # combine values based on fully_dimensional!
-        if self.fully_dimensional:
-            pdfs[indices] = 0  # remove self interaction
-
-            pdfs2 = np.sum(np.prod(pdfs, axis=-1), axis=-1)
-            sm_return_value = -np.log(pdfs2).sum()
-            pdfs = np.prod(pdfs, axis=-1)
-
-            # take weighted average (accounts for LOO!)
-            lhs = np.sum(pdfs * self.weights, axis=-1) / (1 - self.weights)
+        if data_predict is None:
+            data_predict = self.data
         else:
-            # import pdb; pdb.set_trace()
-            pdfs[indices] = 0  # we sum first so 0 is the appropriate value
-            pdfs *= self.weights[:, None, None]
+            data_predict = _adjust_shape(data_predict, self.k_vars)
 
-            pdfs = pdfs.sum(axis=-2) / (1 - self.weights[:, None])
-            lhs = np.prod(pdfs, axis=-1)
+        pdf_est = []
+        for i in range(np.shape(data_predict)[0]):
+            pdf_est.append(weighted_generalized_kernel_prod(
+                self.bw,
+                data=self.data,
+                data_predict=data_predict[i, :],
+                data_weights=self.data_weights,
+                var_type=self.var_type) / self.nobs)
 
-        return -np.sum(self.weights * np.log(lhs))
+        pdf_est = np.squeeze(pdf_est)
+        return np.maximum(pdf_est, self.min_density)
 
-    # @self._convert_config_to_data
-    def pdf(self, x_test):
-        """
-        Computes the probability density function at all x_test
-        """
-        N, D = self.data.shape
-        x_test = np.asfortranarray(x_test)
-        x_test = x_test.reshape([-1, D])
-
-        pdfs = self._individual_pdfs(x_test)
-        # import pdb; pdb.set_trace()
-        # combine values based on fully_dimensional!
-        if self.fully_dimensional:
-            # first the product of the individual pdfs for each point in the data across dimensions and then the average (factorized kernel)
-            pdfs = np.sum(np.prod(pdfs, axis=-1) *
-                          self.weights[None, :], axis=-1)
-        else:
-            # first the average over the 1d pdfs and the the product over dimensions (TPE like factorization of the pdf)
-            pdfs = np.prod(
-                np.sum(pdfs * self.weights[None, :, None], axis=-2), axis=-1)
-        return pdfs
-
-    # @self._convert_data_to_config
-    def sample(self, num_samples=1):
-
-        samples = np.zeros([num_samples, len(self.types)], dtype=np.float64)
-
-        if self.fully_dimensional:
-            sample_indices = np.random.choice(
-                self.data.shape[0], size=num_samples)
-
-        else:
-            sample_indices = None
-
-        for i, k in enumerate(self.kernels):
-            samples[:, i] = k.sample(sample_indices, num_samples)
-
-        return samples
-
-    def _get_types(self):
-        """extracts the needed types from the configspace for faster retrival later
-
-        type = 0 - numerical (continuous or integer) parameter
-        type >=1 - categorical parameter
-
-        TODO: figure out a way to properly handle ordinal parameters
-
-        """
-        types = []
-        num_values = []
-        logs = []
-        for param_name, hp in self.search_space.items():
-            if isinstance(hp, CategoricalParameter):
-                types.append("U")
-                logs.append(False)
-                num_values.append(len(hp.choices))
-            elif isinstance(hp, IntegerParameter):
-                types.append("I")
-                logs.append(hp.log)
-
-                # TODO - may want to make hp bounds into actual integers in NePS
-                # TODO - how do we account for log integer params in this framework?
-                num_values.append(int(hp.upper - hp.lower + 1))
-            elif isinstance(hp, FloatParameter):
-                types.append("C")
-                logs.append(hp.log)
-                num_values.append(np.inf)
-
-            # TODO - check that Numerical <--> Ordinal
-            elif isinstance(hp, NumericalParameter):
-                types.append("O")
-                logs.append(False)
-                num_values.append(len(hp.sequence))
-            else:
-                raise ValueError("Unsupported Parametertype %s" % type(hp))
-
-        return types, num_values, logs
-
-    def _convert_config_to_data(self, configs):
-        """Converts incoming configurations to a numpy array format
-
-        Args:
-            configs ([type]): [description]
-        """
-        pass
-
-    def _convert_data_to_config(self, data):
-        """Converts outgoing numpy arrays to configuration format
-
-        Args:
-            configs ([type]): [description]
-        """
+    def _prior_enhance_data(self):
         pass
 
 
@@ -314,22 +158,21 @@ if __name__ == "__main__":
         integer=neps.IntegerParameter(lower=2, upper=5, log=True),
         epoch=neps.IntegerParameter(lower=1, upper=100, is_fidelity=True),
     )
-    kde_test = KernelDensityEstimator(SearchSpace(**some_placeholder_space))
-
-    # TODO
-    # kde.fit_prior(prior, num_full_evals=1)
-
-    # TODO consider logscale parameters
-    test_data = np.array(
+    norm_consts = np.array([15, 1, 15, 75])
+    train_data = np.array(
         [
-            [0.001, 1, 7, 1],
-            [0.01, 0, 5, 75],
-            [0.011, 1, 3, 75],
-            [0.021, 0, 6, 1],
-            [0.005, 1, 7, 11],
-            [0.1, 0, 11, 75],
+            [3, 1, 7, 1],
+            [2, 0, 5, 75],
+            [2, 1, 3, 75],
+            [1, 0, 6, 1],
+            [0.5, 1, 7, 11],
+            [1, 0, 11, 75],
+            [15, 1, 15, 15]
         ]
-    )
-    kde_test.fit(test_data)
-    print(kde_test.sample())
-    
+    ) / norm_consts
+    test_data = np.array([[0.5, 1, 7, 75], [8, 0, 15, 1],
+                         [15, 1, 15, 15]]) / norm_consts
+    kde_test = PriorWeightedKDE(train_data, [
+                                'c', 'u', 'o', 'c'], num_values=None, data_weights=[1, 1, 1, 1, 1, 1, 0.1])
+    print(kde_test.bw)
+    print(kde_test.pdf(test_data))

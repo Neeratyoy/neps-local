@@ -51,6 +51,7 @@ scipy = "^1.7"
 torch = ">=1.7.0"
 matplotlib = "^3.4"
 jahs-bench = {git = "https://github.com/automl/jahs_bench_201.git", rev = "dependency_upgrade"}
+statsmodels = "^0.13.2"
 
 [tool.poetry.dev-dependencies]
 jupyter = "^1.0"
