@@ -12,7 +12,7 @@ from ...search_spaces.numerical.integer import IntegerParameter
 from ...search_spaces.search_space import SearchSpace
 from ..base_optimizer import BaseOptimizer
 from .promotion_policy import AsyncPromotionPolicy, PromotionPolicy, SyncPromotionPolicy
-from .sampling_policy import FixedPriorPolicy, RandomUniformPolicy
+from .sampling_policy import FixedPriorPolicy, RandomUniformPolicy, SamplingPolicy
 
 
 class SuccessiveHalving(BaseOptimizer):
@@ -26,8 +26,8 @@ class SuccessiveHalving(BaseOptimizer):
         early_stopping_rate: int = 0,
         initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
         use_priors: bool = False,
-        sampling_policy: SamplingPolicy = None,
-        promotion_policy: PromotionPolicy = None,
+        sampling_policy: SamplingPolicy = RandomUniformPolicy,
+        promotion_policy: PromotionPolicy = SyncPromotionPolicy,
         loss_value_on_error: None | float = None,
         cost_value_on_error: None | float = None,
         logger=None,
@@ -45,18 +45,8 @@ class SuccessiveHalving(BaseOptimizer):
         # SH implicitly sets early_stopping_rate to 0
         # the parameter is exposed to allow HB to call SH with different stopping rates
         self.early_stopping_rate = early_stopping_rate
-        if sampling_policy is None:
-            if use_priors:
-                self.sampling_policy = FixedPriorPolicy(pipeline_space)
-            else:
-                self.sampling_policy = RandomUniformPolicy(pipeline_space)
-        else:
-            self.sampling_policy = sampling_policy
-
-        if promotion_policy is None:
-            self.promotion_policy = SyncPromotionPolicy(self.eta)
-        else:
-            self.promotion_policy = promotion_policy
+        self.sampling_policy = sampling_policy(pipeline_space)
+        self.promotion_policy = promotion_policy(self.eta)
 
         # `max_budget_init` checks for the number of configurations that have been
         # evaluated at the target budget
@@ -99,7 +89,7 @@ class SuccessiveHalving(BaseOptimizer):
         # TODO --- @NEERATYOY --- @NEERATYOY --- @NEERATYOY ---
         # this doesn't work as intended (or other stuff doesn't. We only have 4 fidelities 0-3 in the example, but this
         # one has 4 as the lowest fidelity and goes down to zero. So one more than intended, and possibly backwards, too)
-        for rung in self.rung_map.keys():
+        for rung in sorted(self.rung_map.keys()):
             rung_trace.extend([rung] * self.config_map[rung])
         return rung_trace
 
@@ -149,7 +139,7 @@ class SuccessiveHalving(BaseOptimizer):
         # L2 from Alg 1 in https://arxiv.org/pdf/1603.06560.pdf
         _n_config = np.floor(s_max / (_s + 1)) * self.eta**_s
         config_map = dict()
-        for i in reversed(range(nrungs)):
+        for i in range(nrungs):
             config_map[i] = int(_n_config)
             _n_config //= self.eta
         return config_map
@@ -246,11 +236,11 @@ class SuccessiveHalving(BaseOptimizer):
 
     def is_promotable(self) -> int | None:
         """Returns an int if a rung can be promoted, else a None."""
-        rung_to_promote = None
         rung_next = self._get_rung_to_run()
-        if len(self.rung_promotions[rung_next]) > 0:
-            rung_to_promote = rung_next
-        return rung_to_promote
+        rung_to_promote = rung_next - 1
+        if rung_to_promote >= 0 and len(self.rung_promotions[rung_to_promote]) > 0:
+            return rung_to_promote
+        return None
 
     def is_init_phase(self) -> bool:
         """Decides if optimization is still under the warmstart phase/model-based search.
@@ -306,8 +296,41 @@ class SuccessiveHalving(BaseOptimizer):
             config_id = f"{len(self.observed_configs)}_0"
 
         # important to tell SH to query the next allocation
-        self.update_state_counter()
+        self._update_state_counter()
         return config.hp_values(), config_id, previous_config_id  # type: ignore
+
+
+class SuccessiveHalvingWithPriors(SuccessiveHalving):
+    """Implements a SuccessiveHalving procedure with a sampling and promotion policy."""
+
+    use_priors = True
+
+    def __init__(
+        self,
+        pipeline_space: SearchSpace,
+        budget: int,
+        eta: int = 3,
+        early_stopping_rate: int = 0,
+        initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
+        sampling_policy: SamplingPolicy = FixedPriorPolicy,
+        promotion_policy: PromotionPolicy = SyncPromotionPolicy,
+        loss_value_on_error: None | float = None,
+        cost_value_on_error: None | float = None,
+        logger=None,
+    ):
+        super().__init__(
+            pipeline_space=pipeline_space,
+            budget=budget,
+            eta=eta,
+            early_stopping_rate=early_stopping_rate,
+            initial_design_type=initial_design_type,
+            use_priors=self.use_priors,  # key change to the base SH class
+            sampling_policy=sampling_policy,
+            promotion_policy=promotion_policy,
+            loss_value_on_error=loss_value_on_error,
+            cost_value_on_error=cost_value_on_error,
+            logger=logger,
+        )
 
 
 class AsynchronousSuccessiveHalving(SuccessiveHalving):
@@ -323,6 +346,9 @@ class AsynchronousSuccessiveHalving(SuccessiveHalving):
         use_priors: bool = False,
         sampling_policy: SamplingPolicy = RandomUniformPolicy,
         promotion_policy: PromotionPolicy = AsyncPromotionPolicy,
+        loss_value_on_error: None | float = None,
+        cost_value_on_error: None | float = None,
+        logger=None,
     ):
         super().__init__(
             pipeline_space=pipeline_space,
@@ -333,19 +359,56 @@ class AsynchronousSuccessiveHalving(SuccessiveHalving):
             use_priors=use_priors,
             sampling_policy=sampling_policy,
             promotion_policy=promotion_policy,
+            loss_value_on_error=loss_value_on_error,
+            cost_value_on_error=cost_value_on_error,
+            logger=logger,
         )
+        self.promotion_policy_kwargs.update({"max_rung": self.max_rung})
 
     def is_promotable(self) -> int | None:
         """Returns an int if a rung can be promoted, else a None."""
         rung_to_promote = None
         # iterates starting from the highest fidelity promotable to the lowest fidelity
-        for _rung in reversed(range(self.max_rung)):
-            if len(self.rung_promotions[_rung]) > 0:
-                rung_to_promote = _rung
+        for rung in reversed(range(self.max_rung)):
+            if len(self.rung_promotions[rung]) > 0:
+                rung_to_promote = rung
                 # stop checking when a promotable config found
                 # no need to search at lower fidelities
                 break
         return rung_to_promote
+
+
+class AsynchronousSuccessiveHalvingWithPriors(AsynchronousSuccessiveHalving):
+    """Implements a SuccessiveHalving procedure with a sampling and promotion policy."""
+
+    use_priors = True
+
+    def __init__(
+        self,
+        pipeline_space: SearchSpace,
+        budget: int,
+        eta: int = 3,
+        early_stopping_rate: int = 0,
+        initial_design_type: Literal["max_budget", "unique_configs"] = "max_budget",
+        sampling_policy: SamplingPolicy = RandomUniformPolicy,
+        promotion_policy: PromotionPolicy = AsyncPromotionPolicy,
+        loss_value_on_error: None | float = None,
+        cost_value_on_error: None | float = None,
+        logger=None,
+    ):
+        super().__init__(
+            pipeline_space=pipeline_space,
+            budget=budget,
+            eta=eta,
+            early_stopping_rate=early_stopping_rate,
+            initial_design_type=initial_design_type,
+            use_priors=self.use_priors,  # key change from ASHA
+            sampling_policy=sampling_policy,
+            promotion_policy=promotion_policy,
+            loss_value_on_error=loss_value_on_error,
+            cost_value_on_error=cost_value_on_error,
+            logger=logger,
+        )
 
 
 if __name__ == "__main__":
