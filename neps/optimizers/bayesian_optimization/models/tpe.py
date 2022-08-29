@@ -19,9 +19,11 @@ from neps.search_spaces import (
     IntegerParameter,
     NumericalParameter,
 )
+
 from neps.optimizers import BaseOptimizer
 from neps.search_spaces.search_space import SearchSpace
-
+from neps.optimizers.bayesian_optimization.kernels.utils import extract_configs
+        
 
 class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
 
@@ -161,11 +163,15 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
             previous_results: dict[str, ConfigResult],
             pending_evaluations: dict[str, ConfigResult],
         ) -> None:
-        train_x = [el.config for el in previous_results.values()]
         train_y = [self.get_loss(el.result) for el in previous_results.values()]
-        self._num_train_x = len(train_x)
-        self._pending_evaluations = [el for el in pending_evaluations.values()]
-
+        
+        # This is to extract the configurations as numpy arrays on the format num_data x num_dim
+        train_x_configs = [el.config for el in previous_results.values()]
+        train_x_np = np.array([[x_.normalized().value for x_ in list(x.values())] for x in train_x_configs]))
+        pending_x_configs = [el.config for el in pending_evaluations.values()]
+        pending_x_np = np.array([[x_.normalized().value for x_ in list(x.values())] for x in pending_x_configs]))
+        
+        
 
     def get_config_and_ids(  # pylint: disable=no-self-use
             self,
