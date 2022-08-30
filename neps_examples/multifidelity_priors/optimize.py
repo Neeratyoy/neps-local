@@ -32,7 +32,8 @@ pipeline_space = dict(
     float2=neps.FloatParameter(lower=-10, upper=10),
     categorical=neps.CategoricalParameter(choices=[0, 1]),
     integer1=neps.IntegerParameter(
-        lower=0, upper=50, default=35, default_confidence="low"),
+        lower=0, upper=50, default=35, default_confidence="low"
+    ),
     fidelity=neps.IntegerParameter(lower=1, upper=5, is_fidelity=True),
 )
 

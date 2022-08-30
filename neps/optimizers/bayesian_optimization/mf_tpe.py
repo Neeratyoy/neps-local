@@ -1,52 +1,50 @@
 from __future__ import annotations
 
 import logging
+import random
 from copy import deepcopy
 from typing import Iterable, Union
-import random
 
 import numpy as np
 import scipy.stats as sps
 import torch
-
 from metahyper.api import ConfigResult, instance_from_map
 
 import neps
-from neps.search_spaces import (
+
+from ...search_spaces import (
     CategoricalParameter,
     FloatParameter,
     IntegerParameter,
     NumericalParameter,
 )
-
-from neps.optimizers import BaseOptimizer
-from neps.search_spaces.search_space import SearchSpace
-from neps.optimizers.bayesian_optimization.kernels.utils import extract_configs
-from neps.optimizers.bayesian_optimization.models import MultiFidelityPriorWeightedKDE
-from .models import SurrogateModelMapping
+from ...search_spaces.search_space import SearchSpace
+from .. import BaseOptimizer
 from .acquisition_samplers import AcquisitionSamplerMapping
+from .kernels.utils import extract_configs
+from .models import MultiFidelityPriorWeightedKDE, SurrogateModelMapping
 
 
 class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
-
-    def __init__(self,
-                 pipeline_space: SearchSpace,
-                 use_priors: bool = False,
-                 prior_num_evals: float = 1.0,
-                 good_fraction: float = 0.333,
-                 random_interleave_prob: float = 0.333,
-                 initial_design_size: int = 0,
-                 prior_as_samples: bool = False,
-                 pending_as_bad: bool = True,
-                 surrogate_model: str = 'kde',
-                 acquisition_sampler: str | AcquisitionSampler = "mutation",
-                 surrogate_model_args: dict = None,
-                 patience: int = 50,
-                 logger=None,
-                 budget: None | int | float = None,
-                 loss_value_on_error: None | float = None,
-                 cost_value_on_error: None | float = None
-                 ):
+    def __init__(
+        self,
+        pipeline_space: SearchSpace,
+        use_priors: bool = False,
+        prior_num_evals: float = 1.0,
+        good_fraction: float = 0.333,
+        random_interleave_prob: float = 0.333,
+        initial_design_size: int = 0,
+        prior_as_samples: bool = False,
+        pending_as_bad: bool = True,
+        surrogate_model: str = "kde",
+        acquisition_sampler: str | AcquisitionSampler = "mutation",
+        surrogate_model_args: dict = None,
+        patience: int = 50,
+        logger=None,
+        budget: None | int | float = None,
+        loss_value_on_error: None | float = None,
+        cost_value_on_error: None | float = None,
+    ):
         """[summary]
 
         Args:
@@ -60,7 +58,7 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
                 selecting a sample using a strategy instead of randomly. If there is a
                 user prior, we can rely on the model from the very first iteration.
             prior_as_samples: Whether to sample from the KDE and incorporate that way, or
-            just have the distribution be an linear combination of the KDE and the prior. 
+            just have the distribution be an linear combination of the KDE and the prior.
             Should be True if the prior happens to be unnormalized.
             pending_as_bad: Whether to treat pending observations as bad, assigning them to
             the bad KDE to encourage diversity among samples queried in parallel
@@ -80,7 +78,7 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
             logger=logger,
             budget=budget,
             loss_value_on_error=loss_value_on_error,
-            cost_value_on_error=cost_value_on_error
+            cost_value_on_error=cost_value_on_error,
         )
         self.pipeline_space = pipeline_space
         self.min_fideity = pipeline_space.fidelity.lower
@@ -91,24 +89,26 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
         self._initial_design_size = initial_design_size
         self._pending_as_bad = pending_as_bad
 
-        if not surrogate_model == 'kde':
-            raise NotImplementedError('Only supports KDEs for now. Could (maybe?) support binary classification in the future.')
+        if not surrogate_model == "kde":
+            raise NotImplementedError(
+                "Only supports KDEs for now. Could (maybe?) support binary classification in the future."
+            )
         self.acquisition_sampler = acquisition_sampler
         surrogate_model_args = surrogate_model_args or {}
 
         param_types, num_values, logged_params, is_fidelity = self._get_types()
-        surrogate_model_args['param_types'] = param_types
-        surrogate_model_args['num_values'] = num_values
-        surrogate_model_args['is_fidelity'] = is_fidelity
-        
+        surrogate_model_args["param_types"] = param_types
+        surrogate_model_args["num_values"] = num_values
+        surrogate_model_args["is_fidelity"] = is_fidelity
+
         self.surrogate_models = {
-            'good': instance_from_map(
+            "good": instance_from_map(
                 SurrogateModelMapping,
                 surrogate_model,
                 name="surrogate model",
                 kwargs=surrogate_model_args,
             ),
-            'bad': instance_from_map(
+            "bad": instance_from_map(
                 SurrogateModelMapping,
                 surrogate_model,
                 name="surrogate model",
@@ -163,11 +163,11 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
 
     def __call__(
         self, x: Iterable, asscalar: bool = False
-    ) -> Union[np.ndarray, torch.Tensor, float]:
+    ) -> np.ndarray | torch.Tensor | float:
         """
         Return the negative probability of / expected improvement at the query point
         """
-        return self.surrogate_models['good'].pdf(x) / self.surrogate_models['bad'].pdf(x)
+        return self.surrogate_models["good"].pdf(x) / self.surrogate_models["bad"].pdf(x)
 
     # TODO allow this for integers as well - now only supports floats
     def _convert_to_logscale(self):
@@ -185,8 +185,7 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
             [type]: [description]
         """
 
-        num_good_configs = np.ceil(
-            self._num_train_x * self.good_fraction).astype(int)
+        num_good_configs = np.ceil(self._num_train_x * self.good_fraction).astype(int)
         if not round_up:
             num_good_configs -= 1
 
@@ -209,8 +208,7 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
         pending_evaluations: dict[str, ConfigResult],
     ) -> None:
         train_x_configs = [el.config for el in previous_results.values()]
-        train_y = [self.get_loss(el.result)
-                   for el in previous_results.values()]
+        train_y = [self.get_loss(el.result) for el in previous_results.values()]
 
         train_x_configs = [el.config for el in previous_results.values()]
         pending_x_configs = [el.config for el in pending_evaluations.values()]
@@ -218,15 +216,14 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
         self._pending_evaluations = pending_x_configs
         if not self.is_init_phase():
             # This is to extract the configurations as numpy arrays on the format num_data x num_dim
-            good_configs, bad_configs = self._split_configs(
-                train_x_configs, train_y)
+            good_configs, bad_configs = self._split_configs(train_x_configs, train_y)
 
             # TODO drop the fidelity!
-            self.surrogate_models['good'].fit(good_configs)
+            self.surrogate_models["good"].fit(good_configs)
             if self._pending_as_bad:
                 bad_configs.extend(pending_x_configs)
-            self.surrogate_models['bad'].fit(bad_configs)
-        
+            self.surrogate_models["bad"].fit(bad_configs)
+
     def get_config_and_ids(  # pylint: disable=no-self-use
         self,
     ) -> tuple[SearchSpace, str, str | None]:
@@ -256,7 +253,6 @@ class MultiFidelityPriorWeightedTreeParzenEstimator(BaseOptimizer):
         return config.hp_values(), config_id, None
 
 
-
 if __name__ == "__main__":
 
     some_placeholder_space = dict(
@@ -268,6 +264,5 @@ if __name__ == "__main__":
         epoch=IntegerParameter(lower=1, upper=100, is_fidelity=True),
     )
     tpe_test = MultiFidelityPriorWeightedTreeParzenEstimator(
-        pipeline_space=SearchSpace(**some_placeholder_space),
-        max_fidelity=100
+        pipeline_space=SearchSpace(**some_placeholder_space), max_fidelity=100
     )
