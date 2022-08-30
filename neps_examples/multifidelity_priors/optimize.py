@@ -37,7 +37,7 @@ pipeline_space = dict(
 )
 
 searcher = "multifidelity_tpe"
-searcher_kwargs = dict(use_priors=False, initial_design_size=3)
+searcher_kwargs = dict(use_priors=False, initial_design_size=7)
 
 logging.basicConfig(level=logging.INFO)
 searcher_output = "multifidelity_priors"
