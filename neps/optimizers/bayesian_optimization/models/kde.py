@@ -17,8 +17,8 @@ def weighted_generalized_kernel_prod(
     cont_kerneltype: str = 'gaussian',
     ordered_kerneltype: str = 'wangryzin',
     unordered_kerneltype: str = 'aitchisonaitken',
-    to_sum: bool = True)
-     -> np.ndarray:
+    to_sum: bool = True,
+    ) -> np.ndarray:
     """
     Ripped straight from Statsmodels, with generalization to datapoint weights.
     Returns the non-normalized Generalized Product Kernel Estimator
@@ -75,7 +75,7 @@ def weighted_generalized_kernel_prod(
         return dens
 
 
-class PriorWeightedKDE(KDEMultivariate):
+class MultiFidelityPriorWeightedKDE(KDEMultivariate):
 
     def __init__(self, data, var_type, num_values, bw=None, defaults=None, data_weights=None, prior=None, prior_weight=0, prior_as_samples=False, min_density=-np.inf):
         """
@@ -108,6 +108,11 @@ class PriorWeightedKDE(KDEMultivariate):
             self.prior_enhanced_data = self._prior_enhance_data()
         else:
             self.prior_enhanced_data = self.data
+
+    def fit(self, configs):
+        train_x_np = np.array([[x_.normalized().value for x_ in list(x.values())] for x in train_x_configs])
+        
+        
 
     def pdf(self, data_predict=None):
         """

@@ -15,6 +15,7 @@ from .successive_halving.successive_halving import (
     SuccessiveHalving,
     SuccessiveHalvingWithPriors,
 )
+from .bayesian_optimization.mf_tpe import MultiFidelityPriorWeightedTreeParzenEstimator
 
 SearcherMapping: dict[str, Callable] = {
     "bayesian_optimization": BayesianOptimization,
@@ -28,4 +29,5 @@ SearcherMapping: dict[str, Callable] = {
     "successive_halving_prior": SuccessiveHalvingWithPriors,
     "asha": AsynchronousSuccessiveHalving,
     "asha_prior": AsynchronousSuccessiveHalvingWithPriors,
+    "multifidelity_tpe": MultiFidelityPriorWeightedTreeParzenEstimator
 }
